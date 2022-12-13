@@ -1,6 +1,6 @@
 # Chat Application
 
-A multiple client Chat Room application using Socket Programming in C. It uses concept of multithreading in C using pthread library to handle multiple clients. The server and multiple client processes can run on same or different machines. Clients can connect to server, choose a client from free clients list to chat with and send messages to that client. Messages are end-to-end encrypted using a simple algorithm for generating public key,private key pair.
+A multiple client Chat application using Socket Programming in C. It uses concept of multithreading in C using pthread library to handle multiple clients. The server and multiple client processes can run on same or different machines. Clients can connect to server, choose a client from free clients list to chat with and send messages to that client. Messages are end-to-end encrypted using a simple algorithm for generating public key,private key pair.
 
 ## Tags
 
