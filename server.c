@@ -24,32 +24,6 @@ void error(const char *msg)
     exit(1);
 }
 
-// generate public key
-
-uint8_t generate_public_key()
-{
-    srand(time(0));
-    uint8_t public_key = rand()%MODULO;
-    return public_key;
-}
-
-// Encrypt function 
-
-char* encrypt(uint8_t public_key,char* message)
-{
-    //printf("original message=%s\n",message);
-    int n = strlen(message);
-    char* temp = (char *)malloc(n+1);
-    strcpy(temp, message);
-
-    for (int i=0;i<n;i++){
-        char c = (temp[i] + public_key) % MODULO;
-        temp[i]=c;
-    }
-    //printf("Encrypted message=%s\n",temp);
-    return (char *)temp;
-}
-
 // Client structure 
 
 typedef struct
@@ -57,6 +31,7 @@ typedef struct
 	struct sockaddr_in address;
 	int sockfd;
 	int uid;
+    int uid2;
     uint8_t public_key;
 	char name[NAME_SIZE];
 } client_t;
@@ -67,7 +42,6 @@ client_t *clients[MAX_CLIENTS];
 static _Atomic unsigned int cli_count = 0;
 static int uid = 10;
 pthread_mutex_t clients_mutex = PTHREAD_MUTEX_INITIALIZER;
-uint8_t public_key;
 
 // print ip address
 
@@ -128,7 +102,7 @@ void queue_remove(int uid)
 	pthread_mutex_unlock(&clients_mutex);
 }
 
-// Send message to all clients except sender 
+// Send message to client
 
 void send_message(char *message, int uid)
 {
@@ -139,17 +113,130 @@ void send_message(char *message, int uid)
     {
 		if(clients[i])
         {
-			if(clients[i]->uid != uid)
+			if(clients[i]->uid == uid)
             {
 				n = write(clients[i]->sockfd,message,strlen(message));
         	    if (n < 0)
             	    printf("ERROR writing to socket to user id=%d",uid);
+                break;
 			}
 		}
 	}
 
 	pthread_mutex_unlock(&clients_mutex);
 }
+
+//send user list to user
+
+void send_list(int sockfd, int uid)
+{
+    int n;
+	pthread_mutex_lock(&clients_mutex);
+
+	for(int i=0; i<MAX_CLIENTS; ++i)
+    {
+		if(clients[i])
+        {
+			if(clients[i]->uid != uid)
+            {
+                n = write(sockfd,&clients[i]->uid,sizeof(int));
+                if (n < 0)
+                    error("ERROR reading from socket");
+				
+                if(clients[i]->uid2==uid)
+                {
+                    char buffer[BUFFER_SIZE];
+                    sprintf(buffer, "%s : interested for chat", clients[i]->name);
+                    n = write(sockfd,buffer,strlen(buffer));
+        	        if (n < 0)
+            	        printf("ERROR writing to socket to user id=%d",uid);
+                }
+                else
+                {
+                    n = write(sockfd,clients[i]->name,strlen(clients[i]->name));
+        	        if (n < 0)
+            	        printf("ERROR writing to socket to user id=%d",uid);
+                }
+                
+			}
+		}
+	}
+
+	pthread_mutex_unlock(&clients_mutex);
+
+    int temp = -1;
+    n = write(sockfd,&(temp),sizeof(int));
+    if (n < 0)
+        printf("ERROR writing to socket to user id=%d",uid);
+    
+    return;
+}
+
+//check if user is free
+int check_connection(int uid_target,int uid_self)
+{
+    int result=-1;
+	pthread_mutex_lock(&clients_mutex);
+
+	for(int i=0; i<MAX_CLIENTS; ++i)
+    {
+		if(clients[i] && clients[i]->uid == uid_target)
+        {
+			if(clients[i]->uid2==uid_self)
+                result=1;
+            else if(clients[i]->uid2!=0)
+                result=3;
+            else if(clients[i]->uid2==0)
+                result=2;
+            break;
+		}
+	}
+
+	pthread_mutex_unlock(&clients_mutex);
+    
+    return (result==-1)? 3 : result;
+}
+
+//return name of user from uid
+const char* get_name(int uid_target)
+{
+    char *name;
+	pthread_mutex_lock(&clients_mutex);
+
+	for(int i=0; i<MAX_CLIENTS; ++i)
+    {
+		if(clients[i] && clients[i]->uid == uid_target)
+        {
+			name = clients[i]->name; 
+            break;
+		}
+	}
+
+	pthread_mutex_unlock(&clients_mutex);
+    
+    return name;
+}
+
+//return public key of user from uid
+uint8_t get_publickey(int uid_target)
+{
+    uint8_t result;
+	pthread_mutex_lock(&clients_mutex);
+
+	for(int i=0; i<MAX_CLIENTS; ++i)
+    {
+		if(clients[i] && clients[i]->uid == uid_target)
+        {
+			result=clients[i]->public_key;
+            break;
+		}
+	}
+
+	pthread_mutex_unlock(&clients_mutex);
+    
+    return (result==-1)? 3 : result;
+}
+
 
 // Handle all communication with the client 
 
@@ -165,9 +252,9 @@ void *handle_client(void *arg)
 
     // send public_key to client
 
-    n = write( client_structure->sockfd ,&public_key,sizeof(uint8_t));
-    if (n < 0)
-        error("ERROR writing to socket");
+    //n = write( client_structure->sockfd ,&public_key,sizeof(uint8_t));
+    //if (n < 0)
+    //    error("ERROR writing to socket");
 
 	// Read name of client
 
@@ -177,37 +264,117 @@ void *handle_client(void *arg)
     string_trimln(name);
 
 	strcpy(client_structure->name, name);
-	sprintf(buffer, "%s has joined", client_structure->name);
 
-	printf("\n%s", buffer );
+    // read public key of user
+    n = read( client_structure->sockfd, &client_structure->public_key , sizeof(uint8_t));
+    if (n < 0)
+        error("ERROR reading from socket");
 
-    encrypted_message = encrypt(public_key,buffer);
-	send_message(encrypted_message, client_structure->uid);
+	// sprintf(buffer, "%s has joined", client_structure->name);
 
-	while(1)
+	//printf("\n%s", buffer );
+
+    // encrypted_message = encrypt(public_key,buffer);
+	// send_message(encrypted_message, client_structure->uid);
+
+    while(1)
     {
-        bzero(buffer,BUFFER_SIZE);  
 
-		n = read(client_structure->sockfd , buffer, BUFFER_SIZE );
+        send_list(client_structure->sockfd, client_structure->uid);
+        int choice;
+
+        // read choice
+        n = read(client_structure->sockfd,&choice,sizeof(int));
         if (n < 0)
-    		error("ERROR writing to socket");
+            error("ERROR reading from socket");
 
-        int e = strncmp( "exit",buffer,4);
-
-        if( e!=0 && strlen(buffer) > 0 )
-        {
-            // printf("\n%s", buffer);
-            send_message(buffer, client_structure->uid);
-        }
-		else if ( e == 0 ) 
-        {
-			sprintf(buffer, "%s has left", client_structure->name);
-			printf("\n%s", buffer );
-            encrypted_message = encrypt(public_key,buffer);
-			send_message( encrypted_message, client_structure->uid);
+        if(choice==0)
             break;
-		} 
-	}
+        if(choice!=1)
+        {
+            bool start=false;
+
+            client_structure->uid2 = choice;
+
+            // check and make connection
+        
+            int response;
+
+            for (int i = 0; i < 15; i++)
+            {
+                response=check_connection(client_structure->uid2,client_structure->uid);
+                if(response==1 || response==3)
+                    break;
+                sleep(1);
+            }
+        
+            if(response==1)
+                start=true;
+            else if(response==3)
+            {
+                int temp=3;
+                n = write( client_structure->sockfd ,&temp,sizeof(int));
+                if (n < 0)
+                error("ERROR writing to socket");
+            }
+            else
+            {
+                int temp=2;
+                n = write( client_structure->sockfd ,&temp,sizeof(int));
+                if (n < 0)
+                error("ERROR writing to socket");
+            }
+
+            // send public key and name of user
+
+            if (start==true)
+            {
+            
+                // send name of other user to client
+                strcpy(name,get_name(client_structure->uid2));
+
+                n = write( client_structure->sockfd ,name,strlen(name));
+                if (n < 0)
+                    error("ERROR writing to socket");
+
+                //send public key of other user to client
+                uint8_t temp=get_publickey(client_structure->uid2);
+
+                n = write( client_structure->sockfd ,&temp,sizeof(uint8_t));
+                if (n < 0)
+                    error("ERROR writing to socket");
+
+
+                while(start)
+                {
+                    bzero(buffer,BUFFER_SIZE);  
+
+		            n = read(client_structure->sockfd , buffer, BUFFER_SIZE );
+                    if (n < 0)
+    		            error("ERROR writing to socket");
+
+                    int e = strncmp( "exit",buffer,4);
+
+                    if( e!=0 && strlen(buffer) > 0 )
+                    {
+                        send_message(buffer, client_structure->uid2);
+                    }
+		            else if ( e == 0 ) 
+                    {
+			            sprintf(buffer, "%s has left", client_structure->name);
+			            send_message( buffer, client_structure->uid2);
+                        break;
+		            } 
+	            }
+            }
+            else
+            {
+                // initialize uid2 to 0
+                client_structure->uid2 = 0;
+            } 
+        }
+    }
+	
 
     // Delete client from queue and yield thread
 
@@ -226,9 +393,7 @@ int main(int argc, char *argv[])
 {
      int sockfd, newsockfd, portno,temp;
      socklen_t clilen;
-     char buffer[100],server_name[20],client_name[20];
      struct sockaddr_in serv_addr, cli_addr;
-     int n;
      pthread_t tid;
 
      if (argc < 2) 
@@ -260,9 +425,7 @@ int main(int argc, char *argv[])
 
      listen(sockfd,10);
 
-     public_key = generate_public_key();
-
-     printf("\n*********Chat room started*********\n");
+     printf("\n*********Chat server started*********\n");
 
      while(1)
      {
@@ -287,6 +450,7 @@ int main(int argc, char *argv[])
 		client_structure->address = cli_addr;
 		client_structure->sockfd = newsockfd;
 		client_structure->uid = uid++;
+        client_structure->uid2 = 0;
 
 		// Add client to the queue and fork thread 
 

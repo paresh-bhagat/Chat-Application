@@ -33,6 +33,15 @@ void string_trimln(char* message)
         *first_newline = '\0';
 }
 
+// generate public key
+
+uint8_t generate_public_key()
+{
+    srand(time(0));
+    uint8_t public_key = rand()%MODULO;
+    return public_key;
+}
+
 // generate private key
 
 uint8_t generate_private_key(uint8_t public_key)
@@ -77,8 +86,10 @@ void decrypt(uint8_t private_key,char* message)
 char name[NAME_SIZE];
 int sockfd = 0;
 pthread_t tmp_thread;
-uint8_t public_key;
-uint8_t private_key;
+uint8_t my_public_key;
+uint8_t my_private_key;
+uint8_t user_public_key;
+char user_name[NAME_SIZE];
 
 // function for sending message
 void str_overwrite_stdout() 
@@ -107,6 +118,7 @@ void *send_message()
         if(i==0)
         {
             write(sockfd,message,strlen(message));
+            fflush(stdout);
             pthread_cancel(tmp_thread);
             pthread_exit(NULL);
             break;
@@ -117,7 +129,7 @@ void *send_message()
         //printf("\nEntered message = %s",buffer);
 
         //encrypt message
-        encrypted_message = encrypt(public_key,buffer);
+        encrypted_message = encrypt(user_public_key,buffer);
         int n = write(sockfd,encrypted_message,strlen(encrypted_message));
         if (n < 0)
     	    error("ERROR writing to socket");
@@ -135,7 +147,7 @@ void *recieve_message()
     while (1) 
     {
         bzero(message, BUFFER_SIZE);
-
+        fflush(stdout);
         // read message
 
         int n = read( sockfd, message, BUFFER_SIZE );
@@ -144,12 +156,94 @@ void *recieve_message()
 
         // decrypt
 
-        decrypt(private_key,message); 
+        decrypt(my_private_key,message); 
 
         //printf("Message received");
         printf("%s\n", message); 
         str_overwrite_stdout();
     }
+}
+
+//get public, private keys and usernaame
+
+void presteps_chat(int sockfd)
+{
+    int n;
+    // enter your user name
+
+    printf("Enter your username : ");
+    fgets(name,NAME_SIZE,stdin);
+    string_trimln(name);
+    
+    //send name
+    n = write(sockfd,name,strlen(name));
+    if (n < 0)
+    	error("ERROR writing to socket");
+
+    my_public_key = generate_public_key();
+
+    my_private_key = generate_private_key(my_public_key);
+
+    // send public key
+    n = write(sockfd,&my_public_key,sizeof(uint8_t));
+    if (n < 0)
+        error("ERROR reading from socket");
+
+}
+
+// get active users and return choice
+
+int get_users(int sockfd)
+{
+    int n;
+    
+    // read and print all users available
+    printf("\n*********Users available*********\n");
+
+    int i=0;
+
+    while (1)
+    {
+        char buffer[100];
+        int temp;
+
+        n = read(sockfd,&temp,sizeof(int));
+        if (n < 0)
+            error("ERROR reading from socket");
+
+        if(temp==-1)
+            break;
+
+        n=read(sockfd,buffer,100);
+        if (n < 0)
+            error("ERROR reading from socket");
+        string_trimln(buffer);
+
+        printf("[%d] Chat with %s\n",temp,buffer);
+        i++;
+    }
+
+    
+    printf("\nUsers available for chat: %d\n",i);
+
+    printf("\n[0] Exit program\n");
+    printf("[1] Refresh\n");
+
+    int choice;
+
+    do
+    {
+        printf("\nEnter your choice(Ex. 1,2,0) : ");
+        scanf("%d",&choice);
+    } while (choice<0);
+    
+    // send choice to server
+
+    n = write(sockfd,&choice,sizeof(int));
+    if (n < 0)
+    	error("ERROR writing to socket");
+
+    return choice;
 }
 
 // main funtion
@@ -160,7 +254,7 @@ int main(int argc, char *argv[])
     struct sockaddr_in serv_addr;
     struct hostent *server;
     char buffer[100];
-    char end[]="end connection";
+    
     if (argc < 3) 
     {
        fprintf(stderr,"usage %s hostname port\n", argv[0]);
@@ -194,38 +288,70 @@ int main(int argc, char *argv[])
 
     if (connect(sockfd,(struct sockaddr *) &serv_addr,sizeof(serv_addr)) < 0)
         error("ERROR connecting");
-    else{printf("\nEntered Chat Room successfully\n");}
+    else
+        printf("\n***********Chat App started successfully***********\n");
 
-    // read public key
-   
-    n = read(sockfd,&public_key,sizeof(uint8_t));
-    if (n < 0)
-        error("ERROR writing to socket");
+    presteps_chat(sockfd);
 
-    // generate private key
+    int choice;
 
-    private_key = generate_private_key(public_key);
+    while(1)
+    {
+        
+        choice=get_users(sockfd);
 
-    // enter your user name
+        if(choice==0)
+            break;
+        
+        if(choice!=1)
+        {
+            bool start=false;
+            int response;
 
-    printf("Enter your username : ");
-    fgets(name,NAME_SIZE,stdin);
-    string_trimln(name);
+            //read status from server
+            printf("Waiting for %s response.please wait",user_name);
+            n = read(sockfd,&response,sizeof(int));
+            if (n < 0)
+                error("ERROR reading from socket");
+
+            if(response==1)
+                start=true;
+
+            if(start==true)
+            {
+                // get user name of other user
+                n = read(sockfd,user_name,NAME_SIZE);
+                if (n < 0)
+                    error("ERROR reading from socket");
+                string_trimln(user_name);
+
+                // get public key of other user
+                n = read(sockfd,&user_public_key,sizeof(uint8_t));
+                if (n < 0)
+                    error("ERROR reading from socket");
+
+                printf("***********Chat with %s started***********",user_name);
+
+                pthread_t send_message_thread;
+                pthread_t recieve_message_thread;
+
+                pthread_create(&send_message_thread, NULL, &send_message, NULL);
+                pthread_create(&recieve_message_thread, NULL, &recieve_message, NULL);
+
+                pthread_join(send_message_thread,NULL);
+                pthread_join(recieve_message_thread,NULL);
+            }
+            else
+            {
+                if(response==2)
+                    printf("Timeout.No response from user!!! Connection with %s failed. please try again",user_name);
+                else if(response==3)
+                    printf("User busy or not available!!! Connection with %s failed. please try again",user_name);
+            }
+        }
+           
+    }
     
-    //send name
-    n = write(sockfd,name,strlen(name));
-    if (n < 0)
-    	error("ERROR writing to socket");
-
-	pthread_t send_message_thread;
-    pthread_t recieve_message_thread;
-
-    pthread_create(&send_message_thread, NULL, &send_message, NULL);
-    pthread_create(&recieve_message_thread, NULL, &recieve_message, NULL);
-
-    pthread_join(send_message_thread,NULL);
-    pthread_join(recieve_message_thread,NULL);
-
 	close(sockfd);
 
 	return 0;
