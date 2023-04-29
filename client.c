@@ -236,12 +236,6 @@ int get_users(int sockfd)
         printf("\nEnter your choice(Ex. 1,2,0) : ");
         scanf("%d",&choice);
     } while (choice<0);
-    
-    // send choice to server
-
-    n = write(sockfd,&choice,sizeof(int));
-    if (n < 0)
-    	error("ERROR writing to socket");
 
     return choice;
 }
@@ -301,23 +295,32 @@ int main(int argc, char *argv[])
         choice=get_users(sockfd);
 
         if(choice==0)
-            break;
-        
-        if(choice!=1)
         {
-            bool start=false;
-            int response;
+            // send choice to server
+
+            n = write(sockfd,&choice,sizeof(int));
+            if (n < 0)
+    	        error("ERROR writing to socket");
+             break;
+        }
+        else if(choice!=1)
+        {
+
+            n = write(sockfd,&choice,sizeof(int));
+            if (n < 0)
+    	        error("ERROR writing to socket");
 
             //read status from server
-            printf("Waiting for %s response.please wait",user_name);
+            printf("\nWaiting for response from server.please wait\n");
+
+
+            int response;
+
             n = read(sockfd,&response,sizeof(int));
             if (n < 0)
                 error("ERROR reading from socket");
 
             if(response==1)
-                start=true;
-
-            if(start==true)
             {
                 // get user name of other user
                 n = read(sockfd,user_name,NAME_SIZE);
@@ -344,10 +347,16 @@ int main(int argc, char *argv[])
             else
             {
                 if(response==2)
-                    printf("Timeout.No response from user!!! Connection with %s failed. please try again",user_name);
+                    printf("\nTimeout.No response from user!!! Connection failed. please try again\n");
                 else if(response==3)
-                    printf("User busy or not available!!! Connection with %s failed. please try again",user_name);
+                    printf("\nUser busy or not available!!! Connection failed. please try again\n");
             }
+        }
+        else
+        {
+            n = write(sockfd,&choice,sizeof(int));
+            if (n < 0)
+    	        error("ERROR writing to socket");
         }
            
     }

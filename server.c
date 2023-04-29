@@ -30,8 +30,8 @@ typedef struct
 {
 	struct sockaddr_in address;
 	int sockfd;
-	int uid;
-    int uid2;
+	int uid_self;
+    int uid_user;
     uint8_t public_key;
 	char name[NAME_SIZE];
 } client_t;
@@ -91,7 +91,7 @@ void queue_remove(int uid)
     {
 		if(clients[i])
         {
-			if(clients[i]->uid == uid)
+			if(clients[i]->uid_self == uid)
             {
 				clients[i] = NULL;
 				break;
@@ -113,7 +113,7 @@ void send_message(char *message, int uid)
     {
 		if(clients[i])
         {
-			if(clients[i]->uid == uid)
+			if(clients[i]->uid_self == uid)
             {
 				n = write(clients[i]->sockfd,message,strlen(message));
         	    if (n < 0)
@@ -130,20 +130,22 @@ void send_message(char *message, int uid)
 
 void send_list(int sockfd, int uid)
 {
-    int n;
+    
 	pthread_mutex_lock(&clients_mutex);
+
+    int n;
 
 	for(int i=0; i<MAX_CLIENTS; ++i)
     {
 		if(clients[i])
         {
-			if(clients[i]->uid != uid)
+			if(clients[i]->uid_self != uid)
             {
-                n = write(sockfd,&clients[i]->uid,sizeof(int));
+                n = write(sockfd,&(clients[i]->uid_self),sizeof(int));
                 if (n < 0)
                     error("ERROR reading from socket");
 				
-                if(clients[i]->uid2==uid)
+                if( (clients[i]->uid_user)==uid)
                 {
                     char buffer[BUFFER_SIZE];
                     sprintf(buffer, "%s : interested for chat", clients[i]->name);
@@ -153,7 +155,7 @@ void send_list(int sockfd, int uid)
                 }
                 else
                 {
-                    n = write(sockfd,clients[i]->name,strlen(clients[i]->name));
+                    n = write(sockfd,(clients[i]->name),strlen(clients[i]->name));
         	        if (n < 0)
             	        printf("ERROR writing to socket to user id=%d",uid);
                 }
@@ -162,79 +164,81 @@ void send_list(int sockfd, int uid)
 		}
 	}
 
-	pthread_mutex_unlock(&clients_mutex);
-
     int temp = -1;
-    n = write(sockfd,&(temp),sizeof(int));
+    n = write(sockfd,&temp,sizeof(int));
     if (n < 0)
         printf("ERROR writing to socket to user id=%d",uid);
+
+	pthread_mutex_unlock(&clients_mutex);
+
     
-    return;
+    
 }
 
 //check if user is free
-int check_connection(int uid_target,int uid_self)
+void check_connection(int* choice,int uid_target,int uid_self)
 {
-    int result=-1;
+    
 	pthread_mutex_lock(&clients_mutex);
+
+    int result=-1;
+    
 
 	for(int i=0; i<MAX_CLIENTS; ++i)
     {
-		if(clients[i] && clients[i]->uid == uid_target)
+		if(clients[i] && clients[i]->uid_self == uid_target)
         {
-			if(clients[i]->uid2==uid_self)
+			if(clients[i]->uid_user==uid_self)
                 result=1;
-            else if(clients[i]->uid2!=0)
+            else if(clients[i]->uid_user!=0)
                 result=3;
-            else if(clients[i]->uid2==0)
+            else if(clients[i]->uid_user==0)
                 result=2;
             break;
 		}
 	}
-
-	pthread_mutex_unlock(&clients_mutex);
     
-    return (result==-1)? 3 : result;
+    if(result==-1)
+        result=3;
+    *choice=result;
+    pthread_mutex_unlock(&clients_mutex);
+    
 }
 
 //return name of user from uid
-const char* get_name(int uid_target)
+void get_name(char *name,int uid_target)
 {
-    char *name;
 	pthread_mutex_lock(&clients_mutex);
 
 	for(int i=0; i<MAX_CLIENTS; ++i)
     {
-		if(clients[i] && clients[i]->uid == uid_target)
+		if(clients[i] && clients[i]->uid_self == uid_target)
         {
-			name = clients[i]->name; 
+			strcpy(name ,clients[i]->name); 
             break;
 		}
 	}
 
 	pthread_mutex_unlock(&clients_mutex);
-    
-    return name;
 }
 
 //return public key of user from uid
-uint8_t get_publickey(int uid_target)
+void get_publickey( uint8_t *temp,int uid_target)
 {
-    uint8_t result;
+
 	pthread_mutex_lock(&clients_mutex);
 
 	for(int i=0; i<MAX_CLIENTS; ++i)
     {
-		if(clients[i] && clients[i]->uid == uid_target)
+		if(clients[i] && clients[i]->uid_self == uid_target)
         {
-			result=clients[i]->public_key;
+			*temp=clients[i]->public_key;
             break;
 		}
 	}
 
 	pthread_mutex_unlock(&clients_mutex);
     
-    return (result==-1)? 3 : result;
 }
 
 
@@ -280,7 +284,7 @@ void *handle_client(void *arg)
     while(1)
     {
 
-        send_list(client_structure->sockfd, client_structure->uid);
+        send_list(client_structure->sockfd, client_structure->uid_self);
         int choice;
 
         // read choice
@@ -292,9 +296,8 @@ void *handle_client(void *arg)
             break;
         if(choice!=1)
         {
-            bool start=false;
-
-            client_structure->uid2 = choice;
+            
+            client_structure->uid_user = choice;
 
             // check and make connection
         
@@ -302,50 +305,51 @@ void *handle_client(void *arg)
 
             for (int i = 0; i < 15; i++)
             {
-                response=check_connection(client_structure->uid2,client_structure->uid);
-                if(response==1 || response==3)
+                check_connection(&response, client_structure->uid_user,client_structure->uid_user);
+                if(response==1)
                     break;
                 sleep(1);
             }
         
-            if(response==1)
-                start=true;
-            else if(response==3)
+            if(response==3)
             {
                 int temp=3;
                 n = write( client_structure->sockfd ,&temp,sizeof(int));
                 if (n < 0)
-                error("ERROR writing to socket");
+                    error("ERROR writing to socket");
+                // initialize uid_user to 0
+                client_structure->uid_user = 0;
             }
-            else
+            else if(response==2)
             {
                 int temp=2;
                 n = write( client_structure->sockfd ,&temp,sizeof(int));
                 if (n < 0)
-                error("ERROR writing to socket");
+                    error("ERROR writing to socket");
+                // initialize uid_user to 0
+                client_structure->uid_user = 0;
             }
-
-            // send public key and name of user
-
-            if (start==true)
+            else
             {
             
                 // send name of other user to client
-                strcpy(name,get_name(client_structure->uid2));
+                get_name(name,client_structure->uid_user);
 
                 n = write( client_structure->sockfd ,name,strlen(name));
                 if (n < 0)
                     error("ERROR writing to socket");
 
                 //send public key of other user to client
-                uint8_t temp=get_publickey(client_structure->uid2);
+                uint8_t temp;
+                
+                get_publickey(&temp,client_structure->uid_user);
 
                 n = write( client_structure->sockfd ,&temp,sizeof(uint8_t));
                 if (n < 0)
                     error("ERROR writing to socket");
 
 
-                while(start)
+                while(1)
                 {
                     bzero(buffer,BUFFER_SIZE);  
 
@@ -357,21 +361,16 @@ void *handle_client(void *arg)
 
                     if( e!=0 && strlen(buffer) > 0 )
                     {
-                        send_message(buffer, client_structure->uid2);
+                        send_message(buffer, client_structure->uid_user);
                     }
 		            else if ( e == 0 ) 
                     {
 			            sprintf(buffer, "%s has left", client_structure->name);
-			            send_message( buffer, client_structure->uid2);
+			            send_message( buffer, client_structure->uid_user);
                         break;
 		            } 
 	            }
             }
-            else
-            {
-                // initialize uid2 to 0
-                client_structure->uid2 = 0;
-            } 
         }
     }
 	
@@ -379,7 +378,7 @@ void *handle_client(void *arg)
     // Delete client from queue and yield thread
 
     close(client_structure->sockfd);
-    queue_remove(client_structure->uid);
+    queue_remove(client_structure->uid_self);
     free(client_structure);
     cli_count--;
     pthread_detach(pthread_self());
@@ -449,8 +448,8 @@ int main(int argc, char *argv[])
         client_t *client_structure = (client_t *)malloc(sizeof(client_t));
 		client_structure->address = cli_addr;
 		client_structure->sockfd = newsockfd;
-		client_structure->uid = uid++;
-        client_structure->uid2 = 0;
+		client_structure->uid_self = uid++;
+        client_structure->uid_user = 0;
 
 		// Add client to the queue and fork thread 
 
